@@ -1,0 +1,57 @@
+---
+title: "GUIDE"
+author: "Marek Brynda"
+date: "13 12 2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libs param, include=FALSE}
+# ==== libraries ====
+library(dplyr)
+library(TH.data)
+library(prodlim)
+library(MASS)
+library(combinat)
+library(vcd)
+
+# ==== load data ====
+data("GBSG2")
+```
+## Data
+This data frame contains the observations of 686 women:
+
+* horTh - hormonal therapy, a factor at two levels no and yes.
+* age - of the patients in years.
+* menostat - menopausal status, a factor at two levels pre (premenopausal) and post (postmenopausal).
+* tsize - tumor size (in mm).
+* tgrade - tumor grade, a ordered factor at levels I < II < III.
+* pnodes - number of positive nodes.
+* progrec - progesterone receptor (in fmol).
+* estrec - estrogen receptor (in fmol).
+* time - recurrence free survival time (in days).
+* cens - censoring indicator (0- censored, 1- event).
+```{r plot Kaplan-Meier survival curves, include=T}
+km0 <- prodlim(Hist(time,cens)~horTh,data=GBSG2)
+## first show Kaplan-Meier without confidence limits
+plot(km0,
+     legend.x="bottomleft", # positition of legend
+     legend.cex=0.8,
+     col=c("blue","red"),
+     confint=FALSE)
+```
+## Assign variables to proper matrices
+1. X - K dimensions vector of covariates
+2. Y - univariate response variable 
+3. Z - treatment variable 1 ... G
+
+```{r assign variables, include=TRUE}
+Y <- GBSG2[[ncol(GBSG2)]]
+Z <- GBSG2[[1]]
+X <- GBSG2[2:(ncol(GBSG2)-2)]
+```

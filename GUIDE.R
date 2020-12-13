@@ -2,10 +2,31 @@ library(dplyr)
 library(TH.data)
 library(prodlim)
 library(MASS)
+library(combinat)
+library(vcd)
+library("survival")
+library("survminer")
+
+# http://pages.stat.wisc.edu/~loh/treeprogs/guide/guide02.pdf
+data("Baseball")
 
 # http://publicifsv.sund.ku.dk/~tag/Teaching/share/R-tutorials/Advanced-statistics/SurvivalAnalysis.html
 # https://www.rdocumentation.org/packages/TH.data/versions/1.0-10/topics/GBSG2
 data("GBSG2")
+
+# http://www.sthda.com/english/wiki/cox-proportional-hazards-model
+for(x in colnames(GBSG2)[1:8]){
+  res.cox <- coxph( as.formula(paste('Surv(time, cens)~', x)), data = GBSG2)
+  print(paste(x, summary(res.cox)$wald["pvalue"]))
+}
+
+km0 <- prodlim(Hist(time,cens)~horTh,data=GBSG2[GBSG2$progrec>21,])
+## first show Kaplan-Meier without confidence limits
+plot(km0,
+     legend.x="bottomleft", # positition of legend
+     legend.cex=0.8,
+     col=c("blue","red"),
+     confint=FALSE)
 
 # X - K dimensions vector of covariates
 # Y - univariate response variable 
@@ -13,7 +34,7 @@ data("GBSG2")
 
 Y <- GBSG2[[ncol(GBSG2)]]
 Z <- GBSG2[[1]]
-X <- GBSG2[2:(ncol(GBSG2)-1)]
+X <- GBSG2[2:(ncol(GBSG2)-2)]
 
 G <- Z %>% levels() %>% length()
 K <- X %>% ncol()
@@ -37,9 +58,9 @@ if(F){
   }
 }
 
-summary(X)
-summary(Y)
-summary(Z)
+print(summary(X))
+print(summary(Y))
+print(summary(Z))
 
 split_variable_selection <- function(Xj,Y,Z,G){
   # input: X[[]] (one column)
@@ -90,7 +111,7 @@ split_variable_selection <- function(Xj,Y,Z,G){
   for(v in 1:length(unique(V))){
     additive_data[paste0('v',v)] <- as.numeric(V==v) 
   }
-                             
+  
   add.lm <- lm(y ~ ., data=additive_data)
   
   full_data <- data.frame(y=Y)
@@ -99,10 +120,9 @@ split_variable_selection <- function(Xj,Y,Z,G){
       full_data[paste0('z',z,'v',v)] <- as.numeric((Z==z)&(V==v)) 
     }
   }
-  
   full.lm <- lm(y ~ ., data=full_data)
     
-  pj <- anova(add.lm, full.lm)$`Pr(>F)`[2]
+  pj <- anova(full.lm, add.lm)$`Pr(>F)`[2]
   return(pj)
 }
 
@@ -163,7 +183,6 @@ split_set_selection <- function(Xj,Y,Z,G,split.type=2){
         }
       }
     }
-    print(min_j)
     list_lrc <- left_right_c(Xj, Xj_points, min_j, split.type)
     left <- list_lrc$left
     right <- list_lrc$right
@@ -174,8 +193,44 @@ split_set_selection <- function(Xj,Y,Z,G,split.type=2){
       # for small data testing the second way
       # complete search
       levels_m <- levels(Xj) %>% as.vector()
-      print(levels_m)
-    
+      
+      groups <- as.matrix(expand.grid(rep(list(1:2), length(levels_m))))
+      groups <- groups[-c(1, nrow(groups)),]
+      groups <- groups[groups[,1]==1,]
+      splits <- Map(split, list(levels_m), split(groups, row(groups)))
+      
+      j <- 0
+      min_sum <- Inf 
+      min_j <- 0
+      for(s in splits){
+        j <- j + 1
+        
+        left <- Xj[Xj %in% s[[1]]]
+        right <- Xj[Xj %in% s[[2]]]
+        
+        # check if min 2 values per treatment
+        left_min <- Y[left] %>% table() %>% min()
+        right_min <- Y[right] %>% table() %>% min()
+        
+        if((left_min > 1)&(left_min < Inf)&(right_min > 1)&(right_min < Inf)){
+          # linear model for left nd right
+          fit_l <- lm(Y[left] ~ Xj[left])#, na.action=na.omit)
+          fit_r <- lm(Y[right] ~ Xj[right])#, na.action=na.omit)
+          # coefficients
+          l_coeff <- fit_l$coefficients
+          r_coeff <- fit_r$coefficients
+          # sum of least squares
+          l_sum <- sum((Y[left]  - (l_coeff[1] + l_coeff[2]*Xj[left])) ^ 2)
+          r_sum <- sum((Y[right]  - (r_coeff[1] + r_coeff[2]*Xj[right])) ^ 2)
+          # check sum of least squares if new are better than old
+          if(l_sum+r_sum < min_sum){
+            min_j <- j
+            min_sum <-l_sum+r_sum
+          }
+        }
+      }
+      left <- splits[[min_j]][[1]]
+      right <- splits[[min_j]][[2]]
     }else{
       # performs an approximate search by means of linear discriminant analysis
       # 1
@@ -187,44 +242,20 @@ split_set_selection <- function(Xj,Y,Z,G,split.type=2){
       # 4 
       DC <- D
       DC['class'] <- C
-      lda_dc <- lda(class ~ ., DC)
-      # I am choosing first LDA variable
-      Bvals <- lda_dc$scaling[,1]
-      B <- (D * lda_dc$scaling[,1]) %>% rowSums()
-      # find best way of splitting
-      min_sum <- Inf 
-      min_b <- 0
-      for(b in Bvals[1:(length(Bvals)-1)]){
-        left <- (B<=b) %>% which()
-        right <- (B>b) %>% which()
-        # check if min 2 values per treatment
-        left_min <- Y[left] %>% table() %>% min()
-        right_min <- Y[right] %>% table() %>% min()
-        if((left_min > 1)&(left_min < Inf)&(right_min > 1)&(right_min < Inf)){
-          # linear model for left nd right
-          print(Y[left] %>% table() )
-          print(Y[right] %>% table() %>% min()  )
-          fit_l <- lm(Y[left] ~ Xj[left])
-          fit_r <- lm(Y[right] ~ Xj[right])
-          print(8)
-          # coefficients
-          l_coeff <- fit_l$coefficients
-          r_coeff <- fit_r$coefficients
-          # sum of least squares
-          l_sum <- sum((Y[left]  - (l_coeff[1] + l_coeff[2]*Xj[left])) ^ 2)
-          r_sum <- sum((Y[right]  - (r_coeff[1] + r_coeff[2]*Xj[right])) ^ 2)
-          print(l_coeff)
-          print(r_sum)
-          # check sum of least squares if new are better than old
-          if((l_sum+r_sum) < min_sum){
-            min_b <- b
-            min_sum <-l_sum+r_sum
-          }
-        }
-      }
+      # improvisation 
+      
+      
+      
       left <- (B<=min_b) %>% which()
       right <- (B>min_b) %>% which()
     }
   }
   return(list("left"=left, "right"=right))
 }
+
+for(j in 1:ncol(X)){
+  Xj <- X[[j]]
+  print(paste(j,colnames(X)[j],split_variable_selection(Xj,Y,Z,G)))
+}
+
+
